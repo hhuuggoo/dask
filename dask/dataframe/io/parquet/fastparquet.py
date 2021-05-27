@@ -990,6 +990,7 @@ class FastParquetPartsEngine(FastParquetEngine):
         gather_statistics=None,
         filters=None,
         split_row_groups=True,
+        hive_partitions=None,
         **kwargs,
     ):
         assert not gather_statistics
@@ -1006,12 +1007,15 @@ class FastParquetPartsEngine(FastParquetEngine):
             for rg in range(nrg):
                 pp = copy.copy(p)
                 pp.setdefault('kwargs', {})['row_group'] = rg
+                pp.setdefault('kwargs', {})['hive_partitions'] = hive_partitions
                 new_parts.append(pp)
+        for name in hive_partitions:
+            meta[name] = pd.Series(dtype='str')
         return (meta, stats, new_parts, index)
 
     @classmethod
     def read_partition(cls, fs, piece, columns, index, categories=(),
-                       row_group=None, **kwargs):
+                       row_group=None, hive_partitions=None, **kwargs):
         # Dask passes row_group in via kwargs.  If you're breaking
         # the parquet file into parts, row_group must be passed in
         null_index_name = False
@@ -1041,6 +1045,15 @@ class FastParquetPartsEngine(FastParquetEngine):
             index=index,
             **kwargs.get("read", {}),
         )
+        if hive_partitions:
+            hive_partition_values = {k: None for k in hive_partitions}
+            for url_part in piece[0].split('/'):
+                for partition_name in hive_partitions:
+                    if url_part.startswith(f'{partition_name}='):
+                        value = url_part.split('=')[-1]
+                        hive_partition_values[partition_name] = value
+            for partition_name in hive_partitions:
+                df[partition_name] = hive_partition_values[partition_name]
         return df
 
 
