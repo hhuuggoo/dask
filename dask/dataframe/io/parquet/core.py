@@ -830,12 +830,13 @@ def get_engine(engine):
         else:
             raise RuntimeError("Please install either fastparquet or pyarrow")
 
-    elif engine == "fastparquet":
+    elif engine in ("fastparquet", "fastparquetparts"):
         import_required("fastparquet", "`fastparquet` not installed")
-        from .fastparquet import FastParquetEngine
+        from .fastparquet import FastParquetEngine, FastParquetPartsEngine
 
-        _ENGINES["fastparquet"] = eng = FastParquetEngine
-        return eng
+        _ENGINES["fastparquet"] = FastParquetEngine
+        _ENGINES["fastparquetparts"] = FastParquetPartsEngine
+        return _ENGINES[engine]
 
     elif engine in ("pyarrow", "arrow", "pyarrow-legacy", "pyarrow-dataset"):
         pa = import_required("pyarrow", "`pyarrow` not installed")

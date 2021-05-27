@@ -20,6 +20,9 @@ except ImportError:
 from ...methods import concat
 from ...utils import UNKNOWN_CATEGORIES
 from ..utils import _meta_from_dtypes
+from .... import delayed, compute
+from ....distributed import Client
+
 
 #########################
 # Fastparquet interface #
@@ -973,3 +976,75 @@ class FastParquetEngine(Engine):
         # if appending, could skip this, but would need to check existence
         fn = fs.sep.join([path, "_common_metadata"])
         fastparquet.writer.write_common_metadata(fn, _meta, open_with=fs.open)
+
+
+class FastParquetPartsEngine(FastParquetEngine):
+
+    @classmethod
+    def read_metadata(
+        cls,
+        fs,
+        paths,
+        categories=None,
+        index=None,
+        gather_statistics=None,
+        filters=None,
+        split_row_groups=True,
+        **kwargs,
+    ):
+        assert not gather_statistics
+        (meta, stats, parts, index) = super().read_metadata(
+            fs, paths, categories=categories, index=index,
+            gather_statistics=False,
+            filters=filters, split_row_groups=split_row_groups,
+            **kwargs
+        )
+        num_row_groups = [read_row_groups(fs, x) for x in paths]
+        num_row_groups = compute(*num_row_groups)
+        new_parts = []
+        for p, nrg in zip(parts, num_row_groups):
+            for rg in range(nrg):
+                pp = copy.copy(p)
+                pp.setdefault('kwargs', {})['row_group'] = rg
+                new_parts.append(pp)
+        return (meta, stats, new_parts, index)
+
+    @classmethod
+    def read_partition(cls, fs, piece, columns, index, categories=(),
+                       row_group=None, **kwargs):
+        # Dask passes row_group in via kwargs.  If you're breaking
+        # the parquet file into parts, row_group must be passed in
+        null_index_name = False
+        if isinstance(index, list):
+            if index == [None]:
+                index = []
+                null_index_name = True
+            columns += index
+        assert row_group is not None
+        parquet_file = kwargs.pop("parquet_file", None)
+        assert parquet_file is None
+        assert isinstance(piece, tuple)
+        assert isinstance(piece[0], str)
+        parquet_file = ParquetFile(
+            piece[0], open_with=fs.open, sep=fs.sep, **kwargs.get("file", {})
+        )
+        row_group = parquet_file.row_groups[row_group]
+        if null_index_name:
+            if "__index_level_0__" in parquet_file.columns:
+                # See "Handling a None-labeled index" comment above
+                index = ["__index_level_0__"]
+                columns += index
+        df = parquet_file.read_row_group_file(
+            row_group,
+            columns,
+            categories,
+            index=index,
+            **kwargs.get("read", {}),
+        )
+        return df
+
+
+@delayed
+def read_row_groups(fs, path):
+    pqf = ParquetFile(path, open_with=fs.open, sep=fs.sep)
+    return len(pqf.row_groups)
